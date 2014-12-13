@@ -19,6 +19,8 @@ package org.syncany.plugins.flickr;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -28,7 +30,6 @@ import org.apache.commons.io.FileUtils;
 import org.simpleframework.xml.core.Persister;
 import org.syncany.config.Config;
 import org.syncany.plugins.flickr.FlickrTransferSettings.FlickrAuth;
-import org.syncany.plugins.flickr.util.PngEncoder;
 import org.syncany.plugins.transfer.AbstractTransferManager;
 import org.syncany.plugins.transfer.StorageException;
 import org.syncany.plugins.transfer.files.RemoteFile;
@@ -41,13 +42,14 @@ import com.flickr4java.flickr.RequestContext;
 import com.flickr4java.flickr.auth.Auth;
 import com.flickr4java.flickr.photos.Photo;
 import com.flickr4java.flickr.photos.PhotoList;
+import com.flickr4java.flickr.photos.Size;
 import com.flickr4java.flickr.photosets.Photoset;
 import com.flickr4java.flickr.uploader.UploadMetaData;
 import com.flickr4java.flickr.uploader.Uploader;
-import com.google.common.collect.Sets;
 
 public class FlickrTransferManager extends AbstractTransferManager {
 	private static final Logger logger = Logger.getLogger(FlickrTransferManager.class.getSimpleName());
+	private static final int FLICKR_MIN_IMAGE_BYTES = 17*17*3; // < 16x16 PNGs are rejected sometimes!
 
 	private Flickr flickr;
 	private Auth auth;
@@ -87,7 +89,28 @@ public class FlickrTransferManager extends AbstractTransferManager {
 
 	@Override
 	public void download(RemoteFile remoteFile, File localFile) throws StorageException {
+		Photo photo = getPhoto(remoteFile);
 		
+		try {
+			// Copy PNG file to local cache; This indirection is necessary, because there are some 
+			// ZIP/stream issues when the input stream is directly handed to the PNG decoder.
+			
+			InputStream rawImageStream = flickr.getPhotosInterface().getImageAsStream(photo, Size.ORIGINAL);
+			File tmpFile = config.getCache().createTempFile(remoteFile.getName());
+			
+			FileUtils.copyInputStreamToFile(rawImageStream, tmpFile);	
+			rawImageStream.close();
+			
+			// Decode PNG from file to byte array and write to final file (removes Flickr-bug padding)
+			byte[] paddedPngData = PngEncoder.decodeFromPng(tmpFile);
+			FileOutputStream localFileOutputStream = new FileOutputStream(localFile);
+			
+			localFileOutputStream.write(paddedPngData, FLICKR_MIN_IMAGE_BYTES, paddedPngData.length-FLICKR_MIN_IMAGE_BYTES);
+			localFileOutputStream.close();
+		}
+		catch (Exception e) {
+			throw new StorageException("Cannot download image " + remoteFile + ", Flickr photo ID " + photo.getId(), e);
+		}		
 	}
 
 	@Override
@@ -98,13 +121,13 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			metaData.setFilename(remoteFile.getName() + ".png");
 			metaData.setTitle(remoteFile.getName());
 			metaData.setFilemimetype("image/png");	
-			metaData.setTags(Sets.newHashSet("type='" + remoteFile.getClass().getSimpleName() + "'"));
-					
-			byte[] fileContents = FileUtils.readFileToByteArray(localFile);
+				
+			// Some weird Flickr bug: Images with dimensions < 17x17 are sometimes rejected.			
+			ByteArrayOutputStream paddedContentsOutputStream = new ByteArrayOutputStream();			
+			paddedContentsOutputStream.write(new byte[FLICKR_MIN_IMAGE_BYTES]);
+			paddedContentsOutputStream.write(FileUtils.readFileToByteArray(localFile));
 			
-			if (fileContents.length == 0) {
-				fileContents = new byte[1024];
-			}
+			byte[] fileContents = paddedContentsOutputStream.toByteArray();
 			
 			// Encode local file to PNG image
 			ByteArrayOutputStream encodedPngOutputStream = new ByteArrayOutputStream();
@@ -113,10 +136,7 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			PngEncoder.encodeToPng(fileContents, encodedPngOutputStream);
 			encodedPngOutputStream.close();
 			
-			byte[] pngEncodedFileContents = encodedPngOutputStream.toByteArray();
-			
-			FileUtils.writeByteArrayToFile(new File("/tmp/testfile"), pngEncodedFileContents);
-			//FileUtils.copyFile(pngEncodedTempFile, new File("/tmp/testfile"));
+			byte[] pngEncodedFileContents = encodedPngOutputStream.toByteArray();			
 			
 			// Upload PNG image to Flickr 
 			Uploader uploader = flickr.getUploader();
@@ -133,39 +153,30 @@ public class FlickrTransferManager extends AbstractTransferManager {
 	}
 
 	@Override
-	public boolean delete(RemoteFile remoteFile) throws StorageException {
-		return tryDelete(remoteFile, true);
-	}
-	
-	public boolean tryDelete(RemoteFile remoteFile, boolean retry) throws StorageException {
+	public boolean delete(RemoteFile remoteFile) throws StorageException {		
 		try {
-			Photo photo = remoteFilePhotoIdCache.get(remoteFile);
+			Photo photo = getPhoto(remoteFile);					
+			flickr.getPhotosInterface().delete(photo.getId());
 			
-			if (photo != null) {
-				flickr.getPhotosInterface().delete(photo.getId());
-				return true;
-			}
-			else {
-				list(remoteFile.getClass()); // Update cache!
-				
-				if (retry) {
-					return tryDelete(remoteFile, false);
-				}
-				else {
-					return false;
-				}
-			}
+			return true;
+		}
+		catch (Exception e) {
+			logger.log(Level.WARNING, "Cannot delete remote file " + remoteFile + ". IGNORING.", e);
+			return false;
+		}		
+	}
+
+	@Override
+	public void move(RemoteFile sourceFile, RemoteFile targetFile) throws StorageException {		
+		try {
+			Photo photo = getPhoto(sourceFile);			
+			flickr.getPhotosInterface().setMeta(photo.getId(), targetFile.getName(), null);
 		}
 		catch (Exception e) {
 			throw new StorageException(e);
 		}		
 	}
-
-	@Override
-	public void move(RemoteFile sourceFile, RemoteFile targetFile) throws StorageException {
-		
-	}
-
+	
 	@Override
 	public <T extends RemoteFile> Map<String, T> list(Class<T> remoteFileClass) throws StorageException {
 		try {
@@ -187,7 +198,6 @@ public class FlickrTransferManager extends AbstractTransferManager {
 							fileList.put(remoteFile.getName(), concreteRemoteFile);
 						}
 						
-						System.out.println(photo.getTitle());
 						remoteFilePhotoIdCache.put(remoteFile, photo);
 					}
 					catch (Exception e) {
@@ -243,4 +253,24 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			return false;
 		}		
 	}	
+
+	private Photo getPhoto(RemoteFile remoteFile) throws StorageException {
+		Photo photo = remoteFilePhotoIdCache.get(remoteFile);
+		
+		if (photo != null) {
+			return photo;
+		}
+		else {
+			list(remoteFile.getClass()); // Update cache!
+			
+			photo = remoteFilePhotoIdCache.get(remoteFile);
+			
+			if (photo != null) {
+				return photo;
+			}
+			else {
+				throw new StorageException("Cannot find remote file " + remoteFile);
+			}
+		}
+	}
 }

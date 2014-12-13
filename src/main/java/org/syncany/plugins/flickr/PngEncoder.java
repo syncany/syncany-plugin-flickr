@@ -1,4 +1,4 @@
-package org.syncany.plugins.flickr.util;
+package org.syncany.plugins.flickr;
 
 /*
  * PngEncoder, encodes any byte array, stream or file into a 24-bit bitmap (BMP).
@@ -79,7 +79,7 @@ public class PngEncoder {
 
 	private static final int  PNG_CHUNK_TEXT_OFFSET_DATA_TYPE            = 4;
 	private static final int  PNG_CHUNK_TEXT_OFFSET_MAGIC_IDENTIFIER     = 8;
-	private static final int  PNG_CHUNK_TEXT_SIZE_DATA_AND_TYPE          = 16;  
+	private static final int  PNG_CHUNK_TEXT_SIZE_DATA_AND_TYPE          = 12;  
 	private static final int  PNG_CHUNK_TEXT_SIZE_MAGIC_IDENTIFIER       = 4;
 	private static final int  PNG_CHUNK_TEXT_SIZE_PAYLOAD                = 4;	
 	
@@ -331,7 +331,7 @@ public class PngEncoder {
      * @return The original data read from the bitmap (payload)
      * @throws IOException Thrown if the input/output stream cannot be read/written
      */
-    public static byte[] decodeFromBitmap(InputStream srcStream) throws IOException {
+    public static byte[] decodeFromPng(InputStream srcStream) throws IOException {
     	ByteArrayOutputStream destStream = new ByteArrayOutputStream();
     	decodeFromPng(srcStream, destStream);
     	
