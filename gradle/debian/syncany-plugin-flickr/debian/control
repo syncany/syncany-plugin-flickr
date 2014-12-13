@@ -1,4 +1,4 @@
-Source: syncany-plugin-dropbox
+Source: syncany-plugin-flickr
 Section: utils
 Priority: extra
 Maintainer: Philipp Heckel <philipp.heckel@gmail.com>
@@ -6,12 +6,12 @@ Build-Depends: bash-completion, debhelper (>= 8.0.0) | debhelper (>= 9.0.0)
 Standards-Version: 3.9.4
 Homepage: https://www.syncany.org
 
-Package: syncany-plugin-dropbox
+Package: syncany-plugin-flickr
 Architecture: ${pluginDebianArchitecture}
 Depends: ${pluginMiscDepends}, syncany (>= ${pluginAppMinVersion})
 Homepage: https://www.syncany.org/
 Description: Dropbox plugin for Syncany
- This plugin makes it possible to use a Dropbox folder as a backend 
- for Syncany. 
+ This plugin makes it possible to use a Flickr album as a backend 
+ for Syncany. It encodes files as images.
  .
  The package relies on the original Syncany package.
