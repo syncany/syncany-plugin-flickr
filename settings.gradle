@@ -1,0 +1,1 @@
+apply from: 'core/gradle/gradle/plugins.settings.gradle'
