@@ -1,0 +1,14 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+
+dependencies {
+	compile			project(":syncany-lib")
+	compile			project(":syncany-util")
+	compile			"net.sf.jopt-simple:jopt-simple:4.5"      
+	
+	testCompile		"com.github.stefanbirkner:system-rules:1.5.0"            
+      	
+	testCompile		project(path: ":syncany-lib", configuration: "tests")
+	testCompile		project(path: ":syncany-util", configuration: "tests")
+	testCompile		"junit:junit:4.9"   	      
+}
