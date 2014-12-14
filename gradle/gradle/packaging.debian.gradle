@@ -1,0 +1,70 @@
+// Packaging ///////////////////////////////////////////////////////////////////
+
+project.ext {
+	debianDistribution = (applicationRelease) ? "release" : "snapshot"
+	debianVersionExtension = ("snapshot".equals(debianDistribution)) ? "~${applicationVersionDebian}" : ""
+	debianApplicationVersionFull = "${applicationVersionFull}".replaceAll("-", ".") + debianVersionExtension
+}
+
+task debianClean(type: Delete) {
+	delete 'build/debian'	
+}
+
+task debianManpages(dependsOn: installApp) {
+	doLast {
+		rootProject.file("build/debian/syncany/debian").mkdirs()
+	
+		exec {
+			workingDir rootProject.file("gradle/debian")
+			commandLine "./makemanpages.pl"
+		}
+	}
+}
+
+task debianPrepare(dependsOn: [debianClean, installApp, debianManpages]) { 
+	doLast {
+		copy {
+			from rootProject.files("build/install/syncany") 
+			into rootProject.file("build/debian/syncany")
+			exclude("**/*.bat")
+		}
+
+		copy {
+			from rootProject.files("build/install/syncany/LICENSE.md") 
+			into rootProject.file("build/debian/syncany/debian")
+			rename("LICENSE.md", "copyright")
+		}
+
+		copy {
+			from rootProject.files("gradle/debian/debian-core") 
+			into rootProject.file("build/debian/syncany/debian")
+		}
+
+		copy {
+			from rootProject.files("gradle/bash/syncany.bash-completion") 
+			into rootProject.file("build/debian/syncany/debian")
+		}
+
+		exec {
+			workingDir rootProject.file("gradle/debian")
+			commandLine "./makechangelog.pl", "syncany", "${debianDistribution}", "${debianApplicationVersionFull}", "../../CHANGELOG.md", "../../build/debian/syncany/debian/changelog"
+		}
+	}
+}
+
+task debian(dependsOn: debianPrepare) { 
+	doLast {
+		exec {
+			workingDir rootProject.file("${buildDir}/debian/syncany")
+			commandLine "debuild -i -us -uc -b".split()
+		}
+				
+		if (!project.ext.has('debDontCopyToUpload')) {
+			copy {
+				from rootProject.files("${buildDir}/debian") 
+				include "*.deb"
+				into rootProject.file("${buildDir}/upload")
+			}
+		}
+	}
+}
