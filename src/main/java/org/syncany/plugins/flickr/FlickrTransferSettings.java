@@ -23,7 +23,6 @@ import org.scribe.model.Token;
 import org.scribe.model.Verifier;
 import org.simpleframework.xml.Element;
 import org.simpleframework.xml.core.Persister;
-import org.syncany.plugins.transfer.Encrypted;
 import org.syncany.plugins.transfer.Setup;
 import org.syncany.plugins.transfer.TransferPluginOptionCallback;
 import org.syncany.plugins.transfer.TransferSettings;
@@ -41,15 +40,6 @@ public class FlickrTransferSettings extends TransferSettings {
 	private AuthInterface authInterface;
 	private Token authToken;
 
-	@Element(name = "key", required = true)
-	@Setup(order = 1, singular = true, description = "API Key")	
-	public String key;
-	
-	@Element(name = "secret", required = true)
-	@Setup(order = 2, sensitive = true, singular = true, description = "API Key Secret")
-	@Encrypted
-	public String secret;
-	
 	@Element(name = "serializedAuth", required = true)
 	@Setup(order = 3, sensitive = true, singular = true, description = "Token", callback = FlickrAuthPluginOptionCallback.class)
 	public String serializedAuth;
@@ -58,14 +48,6 @@ public class FlickrTransferSettings extends TransferSettings {
 	@Setup(order = 4, description = "Album ID")
 	public String album;
 
-	public String getKey() {
-		return key;
-	}
-	
-	public String getSecret() {
-		return secret;
-	}
-	
 	public String getSerializedAuth() {
 		return serializedAuth;
 	}
@@ -77,7 +59,7 @@ public class FlickrTransferSettings extends TransferSettings {
 	public class FlickrAuthPluginOptionCallback implements TransferPluginOptionCallback {
 		@Override
 		public String preQueryCallback() {
-			flickr = new Flickr(key, secret, new REST());
+			flickr = new Flickr(FlickrTransferPlugin.APP_KEY, FlickrTransferPlugin.APP_SECRET, new REST());
 			Flickr.debugStream = false;
 			
 			authInterface = flickr.getAuthInterface();			

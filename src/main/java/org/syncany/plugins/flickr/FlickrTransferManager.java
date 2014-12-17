@@ -59,7 +59,7 @@ public class FlickrTransferManager extends AbstractTransferManager {
 	public FlickrTransferManager(FlickrTransferSettings settings, Config config) throws Exception {
 		super(settings, config);
 
-		this.flickr = new Flickr(settings.getKey(), settings.getSecret(), new REST());
+		this.flickr = new Flickr(FlickrTransferPlugin.APP_KEY, FlickrTransferPlugin.APP_SECRET, new REST());
 		this.auth = new Persister().read(FlickrAuth.class, settings.getSerializedAuth()).toAuth();
 		this.photosetId = settings.getAlbum();
 		this.remoteFilePhotoIdCache = new HashMap<RemoteFile, Photo>();

@@ -20,6 +20,9 @@ package org.syncany.plugins.flickr;
 import org.syncany.plugins.transfer.TransferPlugin;
 
 public class FlickrTransferPlugin extends TransferPlugin {
+	public static final String APP_KEY = "52ce44c5ea23ad0219f7099af69748fb";
+	public static final String APP_SECRET = "08929f959267bf7c";
+	
 	public FlickrTransferPlugin() {
 		super("flickr");
 	}
