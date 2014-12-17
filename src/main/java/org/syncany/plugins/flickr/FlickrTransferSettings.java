@@ -18,6 +18,8 @@
 package org.syncany.plugins.flickr;
 
 import java.io.StringWriter;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import org.scribe.model.Token;
 import org.scribe.model.Verifier;
@@ -36,16 +38,18 @@ import com.flickr4java.flickr.auth.Permission;
 import com.flickr4java.flickr.people.User;
 
 public class FlickrTransferSettings extends TransferSettings {
+	private static final Logger logger = Logger.getLogger(FlickrTransferSettings.class.getSimpleName());
+
 	private Flickr flickr;
 	private AuthInterface authInterface;
 	private Token authToken;
 
 	@Element(name = "serializedAuth", required = true)
-	@Setup(order = 3, sensitive = true, singular = true, description = "Token", callback = FlickrAuthPluginOptionCallback.class)
+	@Setup(order = 1, sensitive = true, singular = true, description = "Token", callback = FlickrAuthPluginOptionCallback.class)
 	public String serializedAuth;
 
 	@Element(name = "album", required = true)
-	@Setup(order = 4, description = "Album ID")
+	@Setup(order = 2, description = "Album ID")
 	public String album;
 
 	public String getSerializedAuth() {
@@ -59,6 +63,8 @@ public class FlickrTransferSettings extends TransferSettings {
 	public class FlickrAuthPluginOptionCallback implements TransferPluginOptionCallback {
 		@Override
 		public String preQueryCallback() {
+			logger.log(Level.INFO, "Creating Flickr instance to get OAuth URL.");
+			
 			flickr = new Flickr(FlickrTransferPlugin.APP_KEY, FlickrTransferPlugin.APP_SECRET, new REST());
 			Flickr.debugStream = false;
 			
@@ -66,44 +72,41 @@ public class FlickrTransferSettings extends TransferSettings {
 			authToken = authInterface.getRequestToken();		
 			
 			String authUrl = authInterface.getAuthorizationUrl(authToken, Permission.DELETE);
+			logger.log(Level.INFO, "OAuth Token is " + authToken + ", auth URL is " + authUrl);
 
 			return String.format(
 				      "\n"
 					+ "Follow this URL to authorize yourself on Flickr:\n\n"
-					+ "    %s\n\n"
-					+ "Input the token it gives you.\n", authUrl);
+					+ "    %s\n", authUrl);
 		}
 
 		@Override
-		public String postQueryCallback(String optionValue) {
+		public String postQueryCallback(String authTokenKey) {
 			try {
-				String authTokenKey = optionValue;
-				
+				// Trade auth token for request token
+				logger.log(Level.INFO, "Now trading auth token for request token ...");			
 				Token requestToken = authInterface.getAccessToken(authToken, new Verifier(authTokenKey));
-				System.out.println("Authentication success");
-				
+								
+				// Check request token
+				logger.log(Level.INFO, "Request token is " + requestToken.getToken() + "; Now checking token ...");
 				Auth auth = authInterface.checkToken(requestToken);
 				
+				// Let all requests (via Flickr object and others) use this auth.
 				flickr.setAuth(auth);
 				RequestContext.getRequestContext().setAuth(auth);
 				
-				// This token can be used until the user revokes it.
-				System.out.println("Token: " + requestToken.getToken());
-				System.out.println("Secret: " + requestToken.getSecret());
-				System.out.println("nsid: " + auth.getUser().getId());
-				System.out.println("Realname: " + auth.getUser().getRealName());
-				System.out.println("Username: " + auth.getUser().getUsername());
-				System.out.println("Permission: " + auth.getPermission().getType());
-				
+				// Save auth to config				
 				FlickrAuth wrappedAuth = new FlickrAuth(auth);				
 				StringWriter serializedAuthStr = new StringWriter();
 				
 				new Persister().write(wrappedAuth, serializedAuthStr);
 				
-				serializedAuth = serializedAuthStr.toString();
-				System.out.println(serializedAuth);
+				serializedAuth = serializedAuthStr.toString();				
+				logger.log(Level.INFO, "Flickr auth object is: " + serializedAuth);
 				
-				return null;
+				return "\n"
+					+ "Syncany has successfully connected to your Flickr account.\n"
+					+ "Now enter the album ID that will be used to store the images.\n";					
 			}
 			catch (Exception e) {
 				throw new RuntimeException("Error requesting Flickr data: " + e.getMessage(), e);
