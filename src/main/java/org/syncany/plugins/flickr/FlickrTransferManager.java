@@ -96,7 +96,7 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			// ZIP/stream issues when the input stream is directly handed to the PNG decoder.
 			
 			InputStream rawImageStream = flickr.getPhotosInterface().getImageAsStream(photo, Size.ORIGINAL);
-			File tmpFile = config.getCache().createTempFile(remoteFile.getName());
+			File tmpFile = createTempFile(remoteFile.getName());
 			
 			FileUtils.copyInputStreamToFile(rawImageStream, tmpFile);	
 			rawImageStream.close();
@@ -132,7 +132,6 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			// Encode local file to PNG image
 			ByteArrayOutputStream encodedPngOutputStream = new ByteArrayOutputStream();
 
-			//File pngEncodedTempFile = config.getCache().createTempFile(remoteFile.getName());
 			PngEncoder.encodeToPng(fileContents, encodedPngOutputStream);
 			encodedPngOutputStream.close();
 			

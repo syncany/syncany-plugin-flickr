@@ -45,7 +45,7 @@ public class FlickrTransferSettings extends TransferSettings {
 	private Token authToken;
 
 	@Element(name = "serializedAuth", required = true)
-	@Setup(order = 1, sensitive = true, singular = true, description = "Token", callback = FlickrAuthPluginOptionCallback.class)
+	@Setup(order = 1, singular = true, description = "Token", callback = FlickrAuthPluginOptionCallback.class)
 	public String serializedAuth;
 
 	@Element(name = "album", required = true)
