@@ -17,7 +17,6 @@
  */
 package org.syncany.plugins.flickr;
 
-import java.io.StringWriter;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.logging.Level;
@@ -26,7 +25,6 @@ import java.util.logging.Logger;
 import org.scribe.model.Token;
 import org.scribe.model.Verifier;
 import org.simpleframework.xml.Element;
-import org.simpleframework.xml.core.Persister;
 import org.syncany.plugins.flickr.FlickrTransferSettings.FlickrOAuthGenerator;
 import org.syncany.plugins.transfer.OAuth;
 import org.syncany.plugins.transfer.OAuthGenerator;
@@ -50,21 +48,25 @@ public class FlickrTransferSettings extends TransferSettings {
 	private AuthInterface authInterface;
 	private Token authToken;
 
-	@Element(name = "serializedAuth", required = true)
-	@Setup(order = 1, visible = false)
-	public String serializedAuth;
-
-	@Element(name = "album", required = true)
-	@Setup(order = 2, description = "Album ID")
+	@Element(name = "album", required = false)
+	@Setup(order = 1, description = "Album ID")
 	public String album;
 
-	public String getSerializedAuth() {
-		return serializedAuth;
-	}
+	@Element(name = "auth", required = true)
+	@Setup(visible = false)
+	public FlickrAuth auth;
 	
 	public String getAlbum() {
 		return album;
 	}
+	
+	public void setAlbum(String album) {
+		this.album = album;
+	}
+	
+	public FlickrAuth getAuth() {
+		return auth;
+	}	
 	
 	public class FlickrOAuthGenerator implements OAuthGenerator {	
 		@Override
@@ -97,20 +99,15 @@ public class FlickrTransferSettings extends TransferSettings {
 								
 				// Check request token
 				logger.log(Level.INFO, "Request token is " + requestToken.getToken() + "; Now checking token ...");
-				Auth auth = authInterface.checkToken(requestToken);
+				Auth originalAuth = authInterface.checkToken(requestToken);
 				
 				// Let all requests (via Flickr object and others) use this auth.
-				flickr.setAuth(auth);
-				RequestContext.getRequestContext().setAuth(auth);
+				flickr.setAuth(originalAuth);
+				RequestContext.getRequestContext().setAuth(originalAuth);
 				
 				// Save auth to config				
-				FlickrAuth wrappedAuth = new FlickrAuth(auth);				
-				StringWriter serializedAuthStr = new StringWriter();
-				
-				new Persister().write(wrappedAuth, serializedAuthStr);
-				
-				serializedAuth = serializedAuthStr.toString();				
-				logger.log(Level.INFO, "Flickr auth object is: " + serializedAuth);									
+				auth = new FlickrAuth(originalAuth);				
+				logger.log(Level.INFO, "Flickr auth object is: " + auth);									
 			}
 			catch (Exception e) {
 				throw new RuntimeException("Error requesting Flickr data: " + e.getMessage(), e);
@@ -118,6 +115,10 @@ public class FlickrTransferSettings extends TransferSettings {
 		}
 	}
 	
+	/**
+	 * Wrapper class used to store the Flickr authentication in the 
+	 * config settings. This is used instead of {@link Auth}.
+	 */
 	public static class FlickrAuth {
 		private String token;
 		private String tokenSecret;
