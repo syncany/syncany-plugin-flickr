@@ -8,10 +8,10 @@ configurations {
 project.ext {
 	pluginId = "flickr"
 	pluginName = "Flickr"
-	pluginVersion = "0.3.1-alpha"
+	pluginVersion = "0.4.0-alpha"
 	pluginDebianVersion = "1"
 	pluginDate = new Date()
-	pluginAppMinVersion = "0.3.1-alpha"
+	pluginAppMinVersion = "0.4.0-alpha"
 	pluginRelease = rootProject.ext.applicationRelease
 	pluginConflictsWith = ""
 
