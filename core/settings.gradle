@@ -1,3 +1,0 @@
-include 'syncany-lib'
-include 'syncany-cli'
-include 'syncany-util'

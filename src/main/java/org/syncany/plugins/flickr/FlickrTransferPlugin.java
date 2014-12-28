@@ -17,11 +17,26 @@
  */
 package org.syncany.plugins.flickr;
 
+import org.apache.log4j.Logger;
+import org.apache.log4j.varia.NullAppender;
 import org.syncany.plugins.transfer.TransferPlugin;
 
 public class FlickrTransferPlugin extends TransferPlugin {
 	public static final String APP_KEY = "52ce44c5ea23ad0219f7099af69748fb";
 	public static final String APP_SECRET = "08929f959267bf7c";
+	
+	static {
+		try {
+			// Remove debug output from Log4J console appender!
+			// See issue #304.
+			
+			Logger.getRootLogger().removeAllAppenders();
+			Logger.getRootLogger().addAppender(new NullAppender());
+		}
+		catch (Exception e) {
+			// Don't care!
+		}
+	}
 	
 	public FlickrTransferPlugin() {
 		super("flickr");
