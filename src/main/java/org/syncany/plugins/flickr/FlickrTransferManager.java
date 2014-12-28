@@ -21,19 +21,23 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import org.apache.commons.io.FileUtils;
-import org.simpleframework.xml.core.Persister;
 import org.syncany.config.Config;
-import org.syncany.plugins.flickr.FlickrTransferSettings.FlickrAuth;
+import org.syncany.database.MultiChunkEntry.MultiChunkId;
 import org.syncany.plugins.transfer.AbstractTransferManager;
 import org.syncany.plugins.transfer.StorageException;
+import org.syncany.plugins.transfer.files.MultichunkRemoteFile;
 import org.syncany.plugins.transfer.files.RemoteFile;
 import org.syncany.plugins.transfer.files.SyncanyRemoteFile;
+import org.syncany.plugins.transfer.files.TempRemoteFile;
 
 import com.flickr4java.flickr.Flickr;
 import com.flickr4java.flickr.FlickrException;
@@ -60,7 +64,7 @@ public class FlickrTransferManager extends AbstractTransferManager {
 		super(settings, config);
 
 		this.flickr = new Flickr(FlickrTransferPlugin.APP_KEY, FlickrTransferPlugin.APP_SECRET, new REST());
-		this.auth = new Persister().read(FlickrAuth.class, settings.getSerializedAuth()).toAuth();
+		this.auth = settings.getAuth().toAuth();
 		this.photosetId = settings.getAlbum();
 		this.remoteFilePhotoIdCache = new HashMap<RemoteFile, Photo>();
 		
@@ -72,6 +76,10 @@ public class FlickrTransferManager extends AbstractTransferManager {
 		Flickr.debugStream = false;
 	}
 
+	public FlickrTransferSettings getSettings() {
+		return (FlickrTransferSettings) settings;
+	}
+	
 	@Override
 	public void connect() throws StorageException {
 		// Nothing
@@ -83,8 +91,49 @@ public class FlickrTransferManager extends AbstractTransferManager {
 	}
 
 	@Override
-	public void init(boolean createIfRequired) throws StorageException {
-		// Nothing
+	public void init(boolean createIfRequired) throws StorageException {		
+		if (createIfRequired) {
+			if (photosetId == null) {
+				logger.log(Level.INFO, "Flickr Init: Create target enabled, and NO album ID given. Creating album ...");				
+				
+				photosetId = createNewAlbum();					
+				getSettings().setAlbum(photosetId);
+			}
+			else {
+				logger.log(Level.INFO, "Flickr Init: Create target enabled, but album ID given (" + photosetId + "). Using this album. Nothing to do.");				
+			}
+		}
+		else {
+			if (photosetId == null) {
+				logger.log(Level.INFO, "Flickr Init: Create target NOT enabled, and NO album ID given. Cannot continue.");				
+				throw new StorageException("Album ID required if 'create target' option not selected.");
+			}
+			else {
+				logger.log(Level.INFO, "Flickr Init: Create target NOT enabled, album ID given (" + photosetId + "). Using this album. Nothing to do.");
+			}
+		}
+	}
+
+	private String createNewAlbum() throws StorageException {
+		try {
+			// Create and upload dummy file (album needs at least one photo)
+		    Path dummyFileTempPath = Files.createTempFile("syncany-temp", ".tmp");
+	        Files.write(dummyFileTempPath, "Syncany rocks!".getBytes());	        
+	        
+	        String dummyPhotoId = upload(dummyFileTempPath.toFile(), new TempRemoteFile(new MultichunkRemoteFile(MultiChunkId.secureRandomMultiChunkId())), false);
+	        
+			Files.delete(dummyFileTempPath);
+
+			// Create album		        
+			String title = "Syncany " + (1000 + Math.abs(new Random().nextInt(8999)));
+			String description = "Flickr-based Syncany repository. Details at www.syncany.org!";
+			
+			Photoset photoset = flickr.getPhotosetsInterface().create(title, description, dummyPhotoId);
+			return photoset.getId();			
+		}
+		catch (Exception e) {
+			throw new StorageException("Cannot initialize repository. Creating Flickr album failed.", e);
+		}
 	}
 
 	@Override
@@ -115,6 +164,10 @@ public class FlickrTransferManager extends AbstractTransferManager {
 
 	@Override
 	public void upload(File localFile, RemoteFile remoteFile) throws StorageException {
+		upload(localFile, remoteFile, true);
+	}	
+
+	private String upload(File localFile, RemoteFile remoteFile, boolean addToPhotoset) throws StorageException {
 		try {
 			UploadMetaData metaData = new UploadMetaData();
 			
@@ -142,14 +195,17 @@ public class FlickrTransferManager extends AbstractTransferManager {
 			String photoId = uploader.upload(pngEncodedFileContents, metaData);
 
 			// Add image to photoset (album)
-			flickr.getPhotosetsInterface().addPhoto(photosetId, photoId);
+			if (addToPhotoset) {
+				flickr.getPhotosetsInterface().addPhoto(photosetId, photoId);
+			}
 			
-			logger.log(Level.INFO, "Uploaded file " + localFile + " to " + remoteFile + ", as photo ID " + photoId);			
+			logger.log(Level.INFO, "Uploaded file " + localFile + " to " + remoteFile + ", as photo ID " + photoId);
+			return photoId;
 		}
 		catch (Exception e) {
 			throw new StorageException("Cannot upload file " + localFile + " to remote file ", e);
 		}
-	}
+	}	
 
 	@Override
 	public boolean delete(RemoteFile remoteFile) throws StorageException {		
@@ -222,14 +278,19 @@ public class FlickrTransferManager extends AbstractTransferManager {
 	
 	@Override
 	public boolean testTargetCanWrite() {
-		return true; // TODO
+		return true;
 	}
 
 	@Override
 	public boolean testTargetExists() {
 		try {
-			Photoset photoset = flickr.getPhotosetsInterface().getInfo(photosetId);
-			return photoset != null;
+			if (photosetId == null) {
+				return false;
+			}
+			else {
+				Photoset photoset = flickr.getPhotosetsInterface().getInfo(photosetId);
+				return photoset != null;
+			}
 		}
 		catch (FlickrException e) {
 			logger.log(Level.SEVERE, "Cannot get information about photoset.", e);
