@@ -1,6 +1,6 @@
 /*
  * Syncany, www.syncany.org
- * Copyright (C) 2011-2014 Philipp C. Heckel <philipp.heckel@gmail.com> 
+ * Copyright (C) 2011-2015 Philipp C. Heckel <philipp.heckel@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -42,8 +43,13 @@ import org.syncany.database.PartialFileHistory;
 import org.syncany.database.PartialFileHistory.FileHistoryId;
 import org.syncany.database.SqlDatabase;
 import org.syncany.database.dao.DatabaseXmlSerializer;
+import org.syncany.database.dao.FileVersionSqlDao;
 import org.syncany.operations.AbstractTransferOperation;
+import org.syncany.operations.cleanup.CleanupOperationOptions.TimeUnit;
 import org.syncany.operations.cleanup.CleanupOperationResult.CleanupResultCode;
+import org.syncany.operations.daemon.messages.CleanupEndSyncExternalEvent;
+import org.syncany.operations.daemon.messages.CleanupStartCleaningSyncExternalEvent;
+import org.syncany.operations.daemon.messages.CleanupStartSyncExternalEvent;
 import org.syncany.operations.down.DownOperation;
 import org.syncany.operations.ls_remote.LsRemoteOperation;
 import org.syncany.operations.ls_remote.LsRemoteOperationResult;
@@ -61,31 +67,31 @@ import org.syncany.plugins.transfer.files.RemoteFile;
  * The purpose of the cleanup operation is to keep the local database and the
  * remote repository clean -- thereby allowing it to be used indefinitely without
  * any performance issues or storage shortage.
- * 
+ *
  * <p>The responsibilities of the cleanup operations include:
  * <ul>
  *   <li>Remove old {@link FileVersion} and their corresponding database entities.
  *       In particular, it also removes {@link PartialFileHistory}s, {@link FileContent}s,
  *       {@link Chunk}s and {@link MultiChunk}s.</li>
  *   <li>Merge metadata of a single client and remove old database version files
- *       from the remote storage.</li>   
+ *       from the remote storage.</li>
  * </ul>
- * 
+ *
  * <p>High level strategy:
  * <ul>
  *    <ol>Lock repo and start thread that renews the lock every X seconds</ol>
  *    <ol>Find old versions / contents / ... from database</ol>
  *    <ol>Delete these versions and contents locally</ol>
  *    <ol>Delete all remote metadata</ol>
- *    <ol>Obtain consistent database files from local database</ol> 
+ *    <ol>Obtain consistent database files from local database</ol>
  *    <ol>Upload new database files to repo</ol>
- *    <ol>Remotely delete unused multichunks</ol> 
+ *    <ol>Remotely delete unused multichunks</ol>
  *    <ol>Stop lock renewal thread and unlock repo</ol>
  * </ul>
- * 
+ *
  * <p><b>Important issues:</b>
  * All remote operations MUST check if the lock has been recently renewed. If it hasn't, the connection has been lost.
- * 
+ *
  * @author Philipp C. Heckel <philipp.heckel@gmail.com>
  */
 public class CleanupOperation extends AbstractTransferOperation {
@@ -121,9 +127,13 @@ public class CleanupOperation extends AbstractTransferOperation {
 		// Do initial check out remote repository preconditions
 		CleanupResultCode preconditionResult = checkPreconditions();
 
+		fireStartEvent();
 		if (preconditionResult != CleanupResultCode.OK) {
+			fireEndEvent();
 			return new CleanupOperationResult(preconditionResult);
 		}
+
+		fireCleanupNeededEvent();
 
 		// At this point, the operation will lock the repository
 		startOperation();
@@ -134,6 +144,7 @@ public class CleanupOperation extends AbstractTransferOperation {
 
 		if (blockingTransactionExist) {
 			finishOperation();
+			fireEndEvent();
 			return new CleanupOperationResult(CleanupResultCode.NOK_REPO_BLOCKED);
 		}
 
@@ -146,6 +157,7 @@ public class CleanupOperation extends AbstractTransferOperation {
 
 		if (preconditionResult != CleanupResultCode.OK) {
 			finishOperation();
+			fireEndEvent();
 			return new CleanupOperationResult(preconditionResult);
 		}
 
@@ -156,9 +168,7 @@ public class CleanupOperation extends AbstractTransferOperation {
 		logger.log(Level.INFO, "Cleanup: Starting transaction.");
 		remoteTransaction = new RemoteTransaction(config, transferManager);
 
-		if (options.isRemoveOldVersions()) {
-			removeOldVersions();
-		}
+		removeOldVersions();
 
 		if (options.isRemoveUnreferencedTemporaryFiles()) {
 			transferManager.removeUnreferencedTemporaryFiles();
@@ -166,7 +176,11 @@ public class CleanupOperation extends AbstractTransferOperation {
 
 		mergeRemoteFiles();
 
+		// We went succesfully through the entire operation and checked everything. Hence we update the last cleanup time.
+		updateLastCleanupTime();
+
 		finishOperation();
+		fireEndEvent();
 
 		return updateResultCode(result);
 	}
@@ -174,12 +188,12 @@ public class CleanupOperation extends AbstractTransferOperation {
 	/**
 	 * This method checks if we have changed anything and sets the
 	 * {@link CleanupResultCode} of the given result accordingly.
-	 * 
+	 *
 	 * @param result The result so far in this operation.
 	 * @return result The original result, with the relevant {@link CleanupResultCode}
 	 */
 	private CleanupOperationResult updateResultCode(CleanupOperationResult result) {
-		if (result.getMergedDatabaseFilesCount() > 0 || result.getRemovedMultiChunks().size() > 0 || result.getRemovedOldVersionsCount() > 0) {
+		if (result.getMergedDatabaseFilesCount() > 0 || result.getRemovedMultiChunksCount() > 0 || result.getRemovedOldVersionsCount() > 0) {
 			result.setResultCode(CleanupResultCode.OK);
 		}
 		else {
@@ -189,10 +203,22 @@ public class CleanupOperation extends AbstractTransferOperation {
 		return result;
 	}
 
+	private void fireStartEvent() {
+		eventBus.post(new CleanupStartSyncExternalEvent(config.getLocalDir().getAbsolutePath()));
+	}
+
+	private void fireCleanupNeededEvent() {
+		eventBus.post(new CleanupStartCleaningSyncExternalEvent(config.getLocalDir().getAbsolutePath()));
+	}
+
+	private void fireEndEvent() {
+		eventBus.post(new CleanupEndSyncExternalEvent(config.getLocalDir().getAbsolutePath(), result));
+	}
+
 	/**
 	 * This method inspects the local database and remote repository to
 	 * see if cleanup should be performed.
-	 * 
+	 *
 	 * @return {@link CleanupResultCode.OK} if nothing prevents continuing, another relevant code otherwise.
 	 */
 	private CleanupResultCode checkPreconditions() throws Exception {
@@ -225,28 +251,35 @@ public class CleanupOperation extends AbstractTransferOperation {
 	}
 
 	/**
-	 * This method checks if there exist {@link FileVersion}s which are to be deleted because the history they are a part 
+	 * This method checks if there exist {@link FileVersion}s which are to be deleted because the history they are a part
 	 * of is too long. It will collect these, remove them locally and add them to the {@link RemoteTransaction} for deletion.
 	 */
 	private void removeOldVersions() throws Exception {
-		Map<FileHistoryId, FileVersion> purgeFileVersions = new HashMap<>();
+		Map<FileHistoryId, List<FileVersion>> purgeFileVersions = new TreeMap<FileHistoryId, List<FileVersion>>();
+		Map<FileHistoryId, FileVersion> purgeBeforeFileVersions = new TreeMap<FileHistoryId, FileVersion>();
 
-		purgeFileVersions.putAll(localDatabase.getFileHistoriesWithMaxPurgeVersion(options.getKeepVersionsCount()));
-		purgeFileVersions.putAll(localDatabase.getDeletedFileVersions());
+		if (options.isRemoveVersionsByInterval()) {
+			// Get file versions that should be purged according to the settings that are given. Time-based.
+			purgeFileVersions = collectPurgableFileVersions();
+		}
 
-		boolean needToRemoveFileVersions = purgeFileVersions.size() > 0;
-
-		if (!needToRemoveFileVersions) {
-			logger.log(Level.INFO, "- Old version removal: Not necessary (no file histories longer than {0} versions found).",
-					options.getKeepVersionsCount());
+		if (options.isRemoveOldVersions()) {
+			// Get all non-final fileversions and deleted (final) fileversions that we want to fully delete.
+			// purgeFileVersions is modified here!
+			purgeBeforeFileVersions = collectPurgeBeforeFileVersions(purgeFileVersions);
+		}
+		if (purgeFileVersions.isEmpty() && purgeBeforeFileVersions.isEmpty()) {
+			logger.log(Level.INFO, "- Old version removal: Not necessary.");
 			return;
 		}
 
-		logger.log(Level.INFO, "- Old version removal: Found {0} file histories that need cleaning (longer than {1} versions).", new Object[] {
-				purgeFileVersions.size(), options.getKeepVersionsCount() });
+		logger.log(Level.INFO, "- Old version removal: Found {0} file histories and {1} file versions that need cleaning.", new Object[] {
+				purgeFileVersions.size(),
+				purgeBeforeFileVersions.size() });
 
 		// Local: First, remove file versions that are not longer needed
-		localDatabase.removeSmallerOrEqualFileVersions(purgeFileVersions);
+		localDatabase.removeSmallerOrEqualFileVersions(purgeBeforeFileVersions);
+		localDatabase.removeFileVersions(purgeFileVersions);
 
 		// Local: Then, determine what must be changed remotely and remove it locally
 		Map<MultiChunkId, MultiChunkEntry> unusedMultiChunks = localDatabase.getUnusedMultiChunks();
@@ -255,13 +288,80 @@ public class CleanupOperation extends AbstractTransferOperation {
 		deleteUnusedRemoteMultiChunks(unusedMultiChunks);
 
 		// Update stats
-		result.setRemovedOldVersionsCount(purgeFileVersions.size());
-		result.setRemovedMultiChunks(unusedMultiChunks);
+		long unusedMultiChunkSize = 0;
+
+		for (MultiChunkEntry removedMultiChunk : unusedMultiChunks.values()) {
+			unusedMultiChunkSize += removedMultiChunk.getSize();
+		}
+
+		result.setRemovedOldVersionsCount(purgeBeforeFileVersions.size() + purgeFileVersions.size());
+		result.setRemovedMultiChunksCount(unusedMultiChunks.size());
+		result.setRemovedMultiChunksSize(unusedMultiChunkSize);
+	}
+
+	private Map<FileHistoryId, FileVersion> collectPurgeBeforeFileVersions(Map<FileHistoryId, List<FileVersion>> purgeFileVersions) {
+		long deleteBeforeTimestamp = System.currentTimeMillis() - options.getMinKeepDeletedSeconds() * 1000;
+		
+		Map<FileHistoryId, FileVersion> deletedFileVersionsBeforeTimestamp = localDatabase.getDeletedFileVersionsBefore(deleteBeforeTimestamp);
+		Map<FileHistoryId, List<FileVersion>> selectedPurgeFileVersions = localDatabase.getFileHistoriesToPurgeBefore(deleteBeforeTimestamp);
+		
+		Map<FileHistoryId, FileVersion> purgeBeforeFileVersions = new HashMap<FileHistoryId, FileVersion>();
+		purgeBeforeFileVersions.putAll(deletedFileVersionsBeforeTimestamp);
+		putAllFileVersionsInMap(selectedPurgeFileVersions, purgeFileVersions);
+		
+		return purgeBeforeFileVersions;
+	}
+
+	/**
+	 * For all time intervals defined in the purge file settings, determine the eligible file
+	 * versions to be purged -- namely all but the newest one.
+	 * 
+	 * @see CleanupOperation 
+	 * @see CleanupOperationOptions#getPurgeFileVersionSettings()
+	 * @see FileVersionSqlDao#getFileHistoriesToPurgeInInterval(long, long, TimeUnit)
+	 */
+	private Map<FileHistoryId, List<FileVersion>> collectPurgableFileVersions() {
+		Map<FileHistoryId, List<FileVersion>> purgeFileVersions = new HashMap<FileHistoryId, List<FileVersion>>();
+
+		long currentTime = System.currentTimeMillis();
+		long previousTruncateIntervalTimeMultiplier = 0;		
+		
+		for (Map.Entry<Long, TimeUnit> purgeFileVersionSetting : options.getPurgeFileVersionSettings().entrySet()) {
+			Long truncateIntervalMultiplier = purgeFileVersionSetting.getKey();
+			TimeUnit truncateIntervalTimeUnit = purgeFileVersionSetting.getValue();			
+			
+			long beginIntervalTimestamp = currentTime - truncateIntervalMultiplier * 1000;
+			long endIntervalTimestamp = currentTime - previousTruncateIntervalTimeMultiplier * 1000;
+			
+			Map<FileHistoryId, List<FileVersion>> newPurgeFileVersions = localDatabase.getFileHistoriesToPurgeInInterval(
+					beginIntervalTimestamp, endIntervalTimestamp, truncateIntervalTimeUnit);
+
+			putAllFileVersionsInMap(newPurgeFileVersions, purgeFileVersions);
+			previousTruncateIntervalTimeMultiplier = truncateIntervalMultiplier;
+		}
+
+		return purgeFileVersions;
+	}
+
+	private void putAllFileVersionsInMap(Map<FileHistoryId, List<FileVersion>> newFileVersions,
+			Map<FileHistoryId, List<FileVersion>> fileHistoryPurgeFileVersions) {
+		
+		for (FileHistoryId fileHistoryId : newFileVersions.keySet()) {
+			List<FileVersion> purgeFileVersions = fileHistoryPurgeFileVersions.get(fileHistoryId);
+			List<FileVersion> newPurgeFileVersions = newFileVersions.get(fileHistoryId);
+			
+			if (purgeFileVersions != null) {
+				purgeFileVersions.addAll(newPurgeFileVersions);
+			}
+			else {
+				fileHistoryPurgeFileVersions.put(fileHistoryId, newPurgeFileVersions);
+			}
+		}
 	}
 
 	/**
 	 * This method adds unusedMultiChunks to the @{link RemoteTransaction} for deletion.
-	 * 
+	 *
 	 * @param unusedMultiChunks which are to be deleted because all references to them are gone.
 	 */
 	private void deleteUnusedRemoteMultiChunks(Map<MultiChunkId, MultiChunkEntry> unusedMultiChunks) throws StorageException {
@@ -284,7 +384,7 @@ public class CleanupOperation extends AbstractTransferOperation {
 	}
 
 	/**
-	 * Checks if Cleanup has been performed less then a configurable time ago. 
+	 * Checks if Cleanup has been performed less then a configurable time ago.
 	 */
 	private boolean wasCleanedRecently() throws Exception {
 		Long lastCleanupTime = localDatabase.getCleanupTime();
@@ -364,9 +464,9 @@ public class CleanupOperation extends AbstractTransferOperation {
 	 * This method decides if a merge is needed. Most of the time it will be, since we need to merge every time we remove
 	 * any FileVersions to delete them remotely. Another reason for merging is if the number of files exceeds a certain threshold.
 	 * This threshold scales linearly with the number of clients that have database files.
-	 * 
+	 *
 	 * @param allDatabaseFilesMap used to determine if there are too many database files.
-	 * 
+	 *
 	 * @return true if there are too many database files or we have removed FileVersions, false otherwise.
 	 */
 	private boolean needMerge(Map<String, List<DatabaseRemoteFile>> allDatabaseFilesMap) {
@@ -381,14 +481,14 @@ public class CleanupOperation extends AbstractTransferOperation {
 		boolean tooManyDatabaseFiles = numberOfDatabaseFiles > maxDatabaseFiles;
 		boolean removedOldVersions = result.getRemovedOldVersionsCount() > 0;
 
-		return removedOldVersions || tooManyDatabaseFiles;
+		return removedOldVersions || tooManyDatabaseFiles || options.isForce();
 	}
 
 	/**
 	 * This method writes the file with merged databases for a single client and adds it to a Map containing all merged
 	 * database files. This is done by querying the local database for all {@link DatabaseVersion}s by this client and
 	 * serializing them.
-	 * 
+	 *
 	 * @param clientName for which we want to write the merged dataabse file.
 	 * @param allMergedDatabaseFiles Map where we add the merged file once it is written.
 	 */
@@ -453,11 +553,11 @@ public class CleanupOperation extends AbstractTransferOperation {
 	/**
 	 * This method obtains a Map with Lists of {@link DatabaseRemoteFile}s as values, by listing them in the remote repo and
 	 * collecting the files per client.
-	 * 
+	 *
 	 * @return a Map with clientNames as keys and lists of corresponding DatabaseRemoteFiles as values.
 	 */
 	private Map<String, List<DatabaseRemoteFile>> retrieveAllRemoteDatabaseFiles() throws StorageException {
-		TreeMap<String, List<DatabaseRemoteFile>> allDatabaseRemoteFilesMap = new TreeMap<String, List<DatabaseRemoteFile>>();
+		SortedMap<String, List<DatabaseRemoteFile>> allDatabaseRemoteFilesMap = new TreeMap<String, List<DatabaseRemoteFile>>();
 		Map<String, DatabaseRemoteFile> allDatabaseRemoteFiles = transferManager.list(DatabaseRemoteFile.class);
 
 		for (Map.Entry<String, DatabaseRemoteFile> entry : allDatabaseRemoteFiles.entrySet()) {
@@ -493,9 +593,16 @@ public class CleanupOperation extends AbstractTransferOperation {
 		long newCleanupNumber = lastRemoteCleanupNumber + 1;
 
 		remoteTransaction.upload(newCleanupFile, new CleanupRemoteFile(newCleanupNumber));
+		localDatabase.writeCleanupNumber(newCleanupNumber);
+	}
 
+	/**
+	 * The cleanup time is used to check if cleanup has been done recently. If it has, we do not need
+	 * to clean again.
+	 */
+	private void updateLastCleanupTime() throws SQLException {
 		// Set cleanup number locally
 		localDatabase.writeCleanupTime(System.currentTimeMillis() / 1000);
-		localDatabase.writeCleanupNumber(newCleanupNumber);
+		localDatabase.commit();
 	}
 }
