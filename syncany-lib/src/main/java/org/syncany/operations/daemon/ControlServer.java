@@ -1,6 +1,6 @@
 /*
  * Syncany, www.syncany.org
- * Copyright (C) 2011-2014 Philipp C. Heckel <philipp.heckel@gmail.com> 
+ * Copyright (C) 2011-2015 Philipp C. Heckel <philipp.heckel@gmail.com> 
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -58,6 +58,16 @@ public class ControlServer implements TailerListener {
 		this.controlFile = new File(UserConfig.getUserConfigDir(), CONTROL_FILE);
 		this.controlFileTailer = new Tailer(controlFile, this, 1000, true);
 		this.eventBus = LocalEventBus.getInstance();		
+	}
+	
+	/**
+	 * Constructor required for unit testing, as you can inject mocks in this way.
+	 */
+	@Deprecated
+	public ControlServer(File ctrlFile, Tailer ctrTailer, LocalEventBus eventBus) {
+		this.controlFile = ctrlFile;
+		this.controlFileTailer = ctrTailer;
+		this.eventBus = eventBus;
 	}
 
 	public void enterLoop() throws IOException, ServiceAlreadyStartedException {

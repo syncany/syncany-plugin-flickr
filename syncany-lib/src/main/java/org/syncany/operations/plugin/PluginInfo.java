@@ -1,6 +1,6 @@
 /*
  * Syncany, www.syncany.org
- * Copyright (C) 2011-2014 Philipp C. Heckel <philipp.heckel@gmail.com> 
+ * Copyright (C) 2011-2015 Philipp C. Heckel <philipp.heckel@gmail.com> 
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,6 +53,9 @@ public class PluginInfo {
 
 	@Element(name = "pluginConflictsWith", required = false)
 	private String conflictingPluginIds; // comma-separated
+
+	@Element(name = "pluginThirdParty", required = false)
+	private boolean pluginThirdParty; 
 
 	@Element(name = "sha256sum", required = false)
 	private String sha256sum;
@@ -142,6 +145,14 @@ public class PluginInfo {
 
 	public void setDownloadUrl(String downloadUrl) {
 		this.downloadUrl = downloadUrl;
+	}
+
+	public boolean isPluginThirdParty() {
+		return pluginThirdParty;
+	}
+
+	public void setPluginThirdParty(boolean pluginThirdParty) {
+		this.pluginThirdParty = pluginThirdParty;
 	}
 
 	public List<String> getConflictingPluginIds() {

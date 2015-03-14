@@ -1,6 +1,6 @@
 /*
  * Syncany, www.syncany.org
- * Copyright (C) 2011-2014 Philipp C. Heckel <philipp.heckel@gmail.com> 
+ * Copyright (C) 2011-2015 Philipp C. Heckel <philipp.heckel@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,14 @@ import joptsimple.OptionSet;
 import joptsimple.OptionSpec;
 
 import org.syncany.cli.util.CommandLineUtil;
-import org.syncany.database.MultiChunkEntry;
 import org.syncany.operations.OperationResult;
 import org.syncany.operations.cleanup.CleanupOperationOptions;
 import org.syncany.operations.cleanup.CleanupOperationResult;
+import org.syncany.operations.daemon.messages.CleanupStartCleaningSyncExternalEvent;
+import org.syncany.operations.daemon.messages.CleanupStartSyncExternalEvent;
 import org.syncany.operations.status.StatusOperationOptions;
+
+import com.google.common.eventbus.Subscribe;
 
 public class CleanupCommand extends Command {
 	@Override
@@ -58,12 +61,11 @@ public class CleanupCommand extends Command {
 		parser.allowsUnrecognizedOptions();
 
 		OptionSpec<Void> optionForce = parser.acceptsAll(asList("f", "force"));
-		OptionSpec<Void> optionNoOldVersionRemoval = parser.acceptsAll(asList("V", "no-version-removal"));
+		OptionSpec<Void> optionNoOlderVersionRemoval = parser.acceptsAll(asList("O", "no-delete-older-than"));
+		OptionSpec<Void> optionNoVersionRemovalByInterval = parser.acceptsAll(asList("I", "no-delete-interval"));
 		OptionSpec<Void> optionNoRemoveTempFiles = parser.acceptsAll(asList("T", "no-temp-removal"));
-		OptionSpec<Integer> optionKeepVersions = parser.acceptsAll(asList("k", "keep-versions")).withRequiredArg().ofType(Integer.class);
-		OptionSpec<String> optionSecondsBetweenCleanups = parser.acceptsAll(asList("t", "time-between-cleanups")).withRequiredArg()
-				.ofType(String.class);
-		OptionSpec<Integer> optionMaxDatabaseFiles = parser.acceptsAll(asList("x", "max-database-files")).withRequiredArg().ofType(Integer.class);
+		OptionSpec<String> optionKeepMinTime = parser.acceptsAll(asList("o", "delete-older-than"))
+				.withRequiredArg().ofType(String.class);
 
 		OptionSet options = parser.parse(operationArgs);
 
@@ -71,42 +73,23 @@ public class CleanupCommand extends Command {
 		operationOptions.setForce(options.has(optionForce));
 
 		// -V, --no-version-removal
-		operationOptions.setRemoveOldVersions(!options.has(optionNoOldVersionRemoval));
+		operationOptions.setRemoveOldVersions(!options.has(optionNoOlderVersionRemoval));
 
 		// -T, --no-temp-removal
 		operationOptions.setRemoveUnreferencedTemporaryFiles(!options.has(optionNoRemoveTempFiles));
+		
+		// -I, --no-delete-interval
+		operationOptions.setRemoveVersionsByInterval(!options.has(optionNoVersionRemovalByInterval));
 
-		// -k=<count>, --keep-versions=<count>		
-		if (options.has(optionKeepVersions)) {
-			int keepVersionCount = options.valueOf(optionKeepVersions);
+		// -o=<time>, --delete-older-than=<time>
+		if (options.has(optionKeepMinTime)) {
+			long keepDeletedFilesForSeconds = CommandLineUtil.parseTimePeriod(options.valueOf(optionKeepMinTime));
 
-			if (keepVersionCount < 1) {
-				throw new Exception("Invalid value for --keep-versions=" + keepVersionCount + "; must be >= 1");
+			if (keepDeletedFilesForSeconds < 0) {
+				throw new Exception("Invalid value for --delete-older-than==" + keepDeletedFilesForSeconds + "; must be >= 0");
 			}
 
-			operationOptions.setKeepVersionsCount(options.valueOf(optionKeepVersions));
-		}
-
-		// -t=<count>, --time-between-cleanups=<count>		
-		if (options.has(optionSecondsBetweenCleanups)) {
-			long secondsBetweenCleanups = CommandLineUtil.parseTimePeriod(options.valueOf(optionSecondsBetweenCleanups));
-
-			if (secondsBetweenCleanups < 0) {
-				throw new Exception("Invalid value for --time-between-cleanups=" + secondsBetweenCleanups + "; must be >= 0");
-			}
-
-			operationOptions.setMinSecondsBetweenCleanups(secondsBetweenCleanups);
-		}
-
-		// -d=<count>, --max-database-files=<count>
-		if (options.has(optionMaxDatabaseFiles)) {
-			int maxDatabaseFiles = options.valueOf(optionMaxDatabaseFiles);
-
-			if (maxDatabaseFiles < 1) {
-				throw new Exception("Invalid value for --max-database-files=" + maxDatabaseFiles + "; must be >= 1");
-			}
-
-			operationOptions.setMaxDatabaseFiles(maxDatabaseFiles);
+			operationOptions.setMinKeepSeconds(keepDeletedFilesForSeconds);
 		}
 
 		// Parse 'status' options
@@ -132,7 +115,8 @@ public class CleanupCommand extends Command {
 			break;
 
 		case NOK_RECENTLY_CLEANED:
-			out.println("Cleanup has been done recently, so it is not necessary. If you are sure it is necessary, override with --force.");
+			out.println("Cleanup has been done recently, so it is not necessary.");
+			out.println("If you are sure it is necessary, override with --force.");
 			break;
 
 		case NOK_LOCAL_CHANGES:
@@ -152,15 +136,10 @@ public class CleanupCommand extends Command {
 				out.println(concreteOperationResult.getMergedDatabaseFilesCount() + " database files merged.");
 			}
 
-			if (concreteOperationResult.getRemovedMultiChunks().size() > 0) {
-				long totalRemovedMultiChunkSize = 0;
-
-				for (MultiChunkEntry removedMultiChunk : concreteOperationResult.getRemovedMultiChunks().values()) {
-					totalRemovedMultiChunkSize += removedMultiChunk.getSize();
-				}
-
+			if (concreteOperationResult.getRemovedMultiChunksCount() > 0) {
 				out.printf("%d multichunk(s) deleted on remote storage (freed %.2f MB)\n",
-						concreteOperationResult.getRemovedMultiChunks().size(), (double) totalRemovedMultiChunkSize / 1024 / 1024);
+						concreteOperationResult.getRemovedMultiChunksCount(),
+						(double) concreteOperationResult.getRemovedMultiChunksSize() / 1024 / 1024);
 			}
 
 			if (concreteOperationResult.getRemovedOldVersionsCount() > 0) {
@@ -178,5 +157,15 @@ public class CleanupCommand extends Command {
 		default:
 			throw new RuntimeException("Invalid result code: " + concreteOperationResult.getResultCode().toString());
 		}
+	}
+
+	@Subscribe
+	public void onCleanupStartEventReceived(CleanupStartSyncExternalEvent syncEvent) {
+		out.printr("Checking if cleanup is needed ...");
+	}
+
+	@Subscribe
+	public void onCleanupStartCleaningEventReceived(CleanupStartCleaningSyncExternalEvent syncEvent) {
+		out.printr("Cleanup is needed, starting to clean ...");
 	}
 }
