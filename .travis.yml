@@ -5,10 +5,8 @@ env:
   global:
   - TERM=dumb
 
-  # FTP credentials
-  - secure: "Kr1v5LVVU71qz/5B4LLFFz0QXl2zp0cguiEc9vgowFKQNCLqm8GBPeVHf9UeusII0I6xe6KEW2MJQKs/8bwui8FJ32DSZmo6ZeIHH/f8HYNU0Gv5sn9JnYFBpviO6wsHeQD5opfkT8yVOIcbRKj4nm18BdCqGqZz4H6itIqk5KA="
-  - secure: "NBsosd36iAWor28wf554em6M9VvzoK3lPUC6MQsj/SrbFDk1VUFlj3+qbu2xuS+Gr3nDqyXXxwsgbAD2dVZn8WtdYMrBy1UF5PsrYICnAdIcvo3+mCm9n9uhpOc/cJGvNDnM9k2zgbJtgo2BmuhG6tWd/0CKPFBHtsOPO0NAifA="
-  - secure: "IGnwLje6dFPhbsqmXewzvT/ipgLw3Py1yscBIThsEnvAsMUhLpuSE0/Nr20Z8C5wIbn5bDPhZsao37KpCcR51E7CopVu2PLoml1jiic1y5ZC9r+mm3iGH8RV1W/b2D6N2fTHuzLUtVp23jIuF0rLBik60+K9z/lGrlsDpkIcKoI="
+  # Encrypted env variable SYNCANY_API_KEY for upload
+  - secure: "epC6aRK+Q+PucJJbMxKfu4YqKhTeilPLiO0g8e8LrKjFReV5g8/y5WWsuBShkMFpqqWQTeLmSvh4Ev1g8p+eKZ22a113+VKD3mWql11wnqAGT2uRyyAuj4kZTfTLbT1nlgXtego7/HA867lIYt9XVkovhEQFxZ+5RwN9Yci7K38="
   
 branches:
   only:
@@ -46,4 +44,4 @@ script:
   - ./gradlew pluginDebianDeb  
 
   # Upload JARs and DEBs
-  - core/gradle/lftp/lftpuploadplugin.sh
+  - core/gradle/upload/upload-plugin.sh
